@@ -33,7 +33,7 @@ flowchart TD
     A[Input Speech Audio] --> B[Audio Preprocessing]
     B --> C[MFCC and Acoustic Feature Extraction]
     C --> D[Feature Preparation]
-    D --> E[Trained CNN Model]
+    D --> E[Trained CNN-LSTM]
     E --> F[Emotion Classification]
     B --> G[Temporal Segmentation]
     G --> C
