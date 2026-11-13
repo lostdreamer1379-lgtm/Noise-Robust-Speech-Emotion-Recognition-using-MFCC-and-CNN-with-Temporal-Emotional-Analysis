@@ -11,6 +11,9 @@ import tensorflow as tf
 import pickle
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
+import soundfile as sf
+from scipy.signal import resample_poly
+from math import gcd
 
 # Optional FFmpeg path
 os.environ["PATH"] += os.pathsep + r"C:\ffmpeg\bin"
@@ -42,10 +45,31 @@ def convert_to_wav(input_path, output_path="uploads/temp.wav"):
             return input_path
     return input_path
 
+# Load audio without librosa.load(), which triggers a slow Numba JIT compile
+# on the first request in a fresh Render worker.
+def load_audio(file_path, duration=None, offset=0.0, target_sr=22050):
+    file_path = convert_to_wav(file_path)
+    audio, sr = sf.read(file_path, dtype="float32", always_2d=False)
+
+    if audio.ndim == 2:
+        audio = np.mean(audio, axis=1)
+
+    start = int(offset * sr)
+    end = None if duration is None else start + int(duration * sr)
+    audio = audio[start:end]
+
+    if audio.size == 0:
+        raise ValueError("The audio file is empty or shorter than the requested offset.")
+
+    if sr != target_sr:
+        divisor = gcd(sr, target_sr)
+        audio = resample_poly(audio, target_sr // divisor, sr // divisor).astype(np.float32)
+
+    return audio, target_sr
+
 # Feature extraction
 def extract_features(file_path):
-    file_path = convert_to_wav(file_path)
-    audio, sr = librosa.load(file_path, duration=3, offset=0.5)
+    audio, sr = load_audio(file_path, duration=3, offset=0.5)
 
     mfcc = np.mean(librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40).T, axis=0)
     chroma = np.mean(librosa.feature.chroma_stft(y=audio, sr=sr).T, axis=0)
@@ -56,7 +80,7 @@ def extract_features(file_path):
 
 # Waveform
 def create_waveform(file_path):
-    y, sr = librosa.load(file_path)
+    y, sr = load_audio(file_path)
 
     plt.figure(figsize=(10,3))
     plt.plot(y)
@@ -70,7 +94,7 @@ def create_waveform(file_path):
 
 # Per-second analysis
 def analyze_per_second(file_path):
-    y, sr = librosa.load(file_path)
+    y, sr = load_audio(file_path)
     duration = len(y) // sr
 
     emotions = []
@@ -125,11 +149,17 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
 
-    file = request.files['file']
+    file = request.files.get('file')
+    if file is None or not file.filename:
+        return "Please choose an audio file.", 400
+
     filepath = os.path.join(UPLOAD_FOLDER, file.filename)
     file.save(filepath)
 
-    features = extract_features(filepath)
+    try:
+        features = extract_features(filepath)
+    except (RuntimeError, ValueError, OSError) as exc:
+        return f"Could not read this audio file. Please upload a WAV file. Details: {exc}", 400
     features = np.expand_dims(features, axis=0)
     features = np.expand_dims(features, axis=2)
 
